@@ -1,0 +1,501 @@
+---
+title: "Y.U.M.I - Yelp User's Maturity Index"
+author: "by Alessio Benedetti - October 27th, 2015"
+subtitle: A way to emphasize relevant users in Yelp®
+output: 
+   pdf_document:
+      includes:
+         in_header: myHeader.tex
+---
+
+# Introduction
+
+Businesses pages on Yelp generally have a high number of reviews. Evaluating them, in order to choose or exclude a particular business, can be time consuming, especially on mobile devices.
+
+The idea behind this paper is to create an index: *the "Y.U.M.I" (Yelp User's Maturity Index)*, which summarizes the "maturity" of each user as well as builds a model to predict its value. By "mature users" we intend users with a consistent contribution to Yelp over
+time: good business reviewing activity as well as a presence in the yelpers community.
+
+# Methods and Data
+
+## Premises
+
+```{r include=FALSE, results='hide'}
+#LOAD LIBRARIES
+library(jsonlite)
+library(data.table)
+library(stringr)
+library(knitr)
+library(caret)
+library(Hmisc)
+library(plyr)
+library(xtable)
+
+#PATHS SELECTION
+#main_path <- #<set here the main path>
+data_path <- "data/dataset"
+rds_path <- "data/rds"
+samples_path <- "data/samples"
+
+#LOAD RAW REVIEW FILE
+review_raw <- readRDS(paste(main_path,rds_path,"review_raw.RDS", sep = '/'))
+
+#CREATE SAMPLE DATAFRAME (sample without replacement)
+#set sample size
+size <- 5000
+review_sample <- review_raw[sample(1:nrow(review_raw), size, replace=FALSE),]
+#rm(review_raw)
+```
+
+Yelp dataset includes five *json* files: `business`, `review`, `user`, `check-in` and `tips`. For a description of the structure of the fields, please refer to "Notes on the Dataset" section, on the [Yelp Challenge](http://www.yelp.com/dataset_challenge) page. 
+
+In our document we will only use two data files: `review` and `user`. We assume that both dataframes are available in RDS flatten format. The sample will be set dynamically without replacement, and will be taken only from the `review` dataframe.
+
+For the full code please refer to the [Github repository](https://github.com/phoinike/Yelp-Challenge-Capstone). This work is licensed under [MIT License](https://github.com/phoinike/Yelp-Challenge-Capstone/blob/master/LICENSE).
+
+## Selection of the fields
+
+The selected/discarded fields are listed in the previous table, together with the relative motivation. 
+ 
+```{r include=FALSE, results='hide'}
+fields_U <- NULL
+fields_U <- rbind(fields_U, data.frame("Field" = "yelping_since",
+                                       "Selected"="yes",
+                                       "Motivation"="Changeable by the account owner")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="review_count",
+                                       "Selected"="yes",
+                                       "Motivation"="Changeable by the account owner")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="name",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="user_id",
+                                       "Selected"="yes",
+                                       "Motivation"="Metadata field")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="friends",
+                                       "Selected"="yes",
+                                       "Motivation"="Changeable by the account owner")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="fans",
+                                       "Selected"="no",
+                                       "Motivation"="Changeable by other users")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="average_stars",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="type",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="elite",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="votes",
+                                       "Selected"="no",
+                                       "Motivation"="Changeable by other users")
+)
+fields_U <- rbind(fields_U, data.frame("Field"="compliments",
+                                       "Selected"="no",
+                                       "Motivation"="Changeable by other users")
+)
+
+fields_R <- NULL
+fields_R <- rbind(fields_R, data.frame("Field" = "user_id",
+                                       "Selected"="yes",
+                                       "Motivation"="Metadata field")
+)
+fields_R <- rbind(fields_R, data.frame("Field"="review_id",
+                                       "Selected"="yes",
+                                       "Motivation"="Metadata field")
+)
+fields_R <- rbind(fields_R, data.frame("Field"="stars",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_R <- rbind(fields_R, data.frame("Field"="date",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_R <- rbind(fields_R, data.frame("Field"="text",
+                                       "Selected"="yes",
+                                       "Motivation"="Changeable by the account owner")
+)
+fields_R <- rbind(fields_R, data.frame("Field"="type",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_R <- rbind(fields_R, data.frame("Field"="business_id",
+                                       "Selected"="no",
+                                       "Motivation"="Not relevant for the index")
+)
+fields_R <- rbind(fields_R, data.frame("Field"="votes",
+                                       "Selected"="no",
+                                       "Motivation"="Changeable by other users")
+)
+```
+
+
+```{r echo=FALSE}
+print(xtable(fields_U), file="fields_U.tex", floating=FALSE, include.rownames=FALSE)
+print(xtable(fields_R), file="fields_R.tex", floating=FALSE, include.rownames=FALSE)
+```
+
+\begin{table}[ht]
+\centering
+\subfloat[user dataframe]{\label{tab:tab1a}\scalebox{.6}{\input{./fields_U}}}\quad
+\subfloat[review dataframe]{\label{tab:tab1b}\scalebox{.6}{\input{./fields_R}}}
+\end{table}
+
+Apart the metadata fields needed to connect data, our criteria was to consider only the fields changeable by the owner.
+
+For example, the `fans` field varies when other users decide to follow or unfollow you. On the other side, the `friends` field contains only the users identified by the owner as friends. The field `elite` is excluded since this value is attributed by Yelp to users who meet particular requirements. [Here](http://www.yelp.com/elite) you can find more details about elite users. The fields `stars` and `average_stars`, are excluded because they already are expression of a rating made by Yelp.
+
+## Creation of the working dataset (WD)
+
+Once the field selection is done we can start to build our working dataset.
+
+From exploratory analysis we know that the `user` dataframe already contains the `review_count` data. Unfortunately we're unable to extrapolate the word
+count from it. The word count can be executed only on the `review` dataframe because is where we have the `text` field.
+
+So initially we need to use the `review` data by counting the number of words for each row, hence for each review. Then we do the aggregation on the word and review counts by `user_id`.
+
+```{r include=FALSE, results='hide'}
+#review_sample <- readRDS(paste(main_path,samples_path,"review_sample.RDS", sep = '/'))
+WD <- as.data.frame(cbind(review_sample$user_id, sapply(gregexpr("[A-z]\\W+", review_sample$text), length) + 1L, 1))
+WD$V2 <- as.numeric(as.character(WD$V2))
+WD$V3 <- as.numeric(as.character(WD$V3))
+#aggregate by users
+WD <- data.table(WD)
+WD <- WD[,list(V2=sum(V2),V3=sum(V3)),by=V1]
+setnames(WD, c("V1","V2","V3"), c("user_id","words","reviews"))
+WD <- as.data.frame(WD)
+rm(review_sample)
+```
+
+## Relation between words and reviews
+
+Next goal is to combine the fields `words` and `reviews`. Apparently one way could be to compute the *simple ratio* (SR) `words`/`reviews`. However, this approach leads to an undesiderable situation where users with only one review jump on top when sorting from higher to lower SR.
+
+An alternative way is to use the *weighted sort* (WS). This kind of sort essentially says this: *if the count column of the sort is very low, assume that the column of interest is roughly the average for the data in question*. Expressed in formula:
+
+$$
+\begin{aligned}
+ SR_{i}=\frac{w_{i}}{r_{i}}
+ \qquad
+ WS_{i}=\frac{w_{i}}{w_{max}}r_{i} + (1-\frac{w_{i}}{w_{max}})\bar{r}
+ \qquad\
+ where\,\,w = \texttt{words}\,\,and\,\,r=\texttt{reviews}
+\end{aligned}
+$$
+
+Here follow the comparison tables with users sorted by SR and WS, with the evidence that WS should be preferred.
+
+```{r include=FALSE, results='hide'}
+#add simple ratio (SR)
+WD$SR <- WD$words/WD$reviews
+#add weighted sort (WS) for words per review
+WD$WS <- (WD$words/max(WD$words)*WD$reviews) + ((1-(WD$words/max(WD$words)))*mean(WD$reviews))
+```
+
+```{r echo=FALSE}
+print(xtable(head(WD[order(-WD$SR),],4)), file="SR.tex", floating=FALSE, include.rownames=FALSE)
+print(xtable(head(WD[order(-WD$WS),],4)), file="WS.tex", floating=FALSE, include.rownames=FALSE)
+```
+
+\begin{table}[ht]
+\centering
+\subfloat[]{\label{tab:tab1a}\scalebox{.6}{\input{./SR}}}\quad
+\subfloat[]{\label{tab:tab1b}\scalebox{.6}{\input{./WS}}}
+\end{table}
+
+For more details, see the following articles by [Peter J. Meyers](https://moz.com/blog/build-your-own-weighted-sort) and
+[Avinash Kaushik](http://www.kaushik.net/avinash/end-dumb-tables-web-analytics-tools-weighted-sorts/).
+
+## Need of a preliminary model
+
+It's now important to observe that an immediate merge by `user_id` cannot be done. This is due to the fact that not all of the reviews made by a user, of which total is reported in the `review_count` field of the `user` dataframe, are contained in the `review` dataframe. 
+
+```{r include=FALSE, results='hide'}
+#remove SR column
+WD <- WD[,-c(4)]
+#load data
+review_data <- readRDS(paste(main_path,rds_path,"review_raw.RDS", sep = '/'))
+user_data <- readRDS(paste(main_path,rds_path,"user_raw.RDS", sep = '/'))
+```
+
+user_id | reviews count (as taken by `review`) | reviews count (as taken by `user`)
+------- | ------------------------------------ | ---------------------------------- 
+`--f43ruUt7LBeB3aU74z-w` | `r length(review_data[review_data$user_id == "--f43ruUt7LBeB3aU74z-w", "user_id"])` | `r user_data[user_data$user_id=="--f43ruUt7LBeB3aU74z-w","review_count"]`
+`--_L4WuJxAfQkRtC1e43hg` | `r length(review_data[review_data$user_id == "--_L4WuJxAfQkRtC1e43hg", "user_id"])` | `r user_data[user_data$user_id=="--_L4WuJxAfQkRtC1e43hg","review_count"]`
+`--0KsjlAThNWua2Pr4HStQ` | `r length(review_data[review_data$user_id == "--0KsjlAThNWua2Pr4HStQ", "user_id"])` | `r user_data[user_data$user_id=="--0KsjlAThNWua2Pr4HStQ","review_count"]`
+
+```{r include=FALSE, results='hide'}
+rm(review_data)
+```
+
+As shown in the previous table, it's clear that even with an initial sample made of the entire `review` dataframe we would have needed to fit a model anyway, due to our current inability to know the complete word count for `user` dataframe users.
+
+## Fit the word count model (Model A)
+
+The word count model, called "model A", will be built from our working dataset (WD). The word count will be the outcome, while the review count and weighted sort will be the predictors. We choose a Random Forest algorithm for its performance.
+
+```{r include=FALSE, results='hide'}
+#MODEL A: Random Forest
+#PREDICTORS: reviews and WS
+#OUTCOME: words
+
+#slice the training set for cross validation
+set.seed(1234)
+slice_A <- createDataPartition(WD$words, p=0.7, list=FALSE)
+sliceTrain_A <- WD[slice_A,c(-1)]
+sliceTest_A <- WD[-slice_A,c(-1)]
+
+#random forest
+modelRF_A <- train(words ~ .,
+                 data=sliceTrain_A,
+                 method="rf",
+                 trControl=trainControl(method="cv", 5),
+                 ntree=10)
+
+predictRF_A <- predict(modelRF_A, sliceTest_A)
+cm_A <- confusionMatrix(cut(predictRF_A, seq(from = 0, to = 2000, by = 10)),cut(sliceTest_A$words, seq(from = 0, to = 2000, by = 10)))
+```
+
+With 10 trees and 5 folds we obtain an accuracy of `r cm_A$overall['Accuracy']` and estimated out-of-sample error of `r 1-cm_A$overall['Accuracy']`.
+
+## Creation of the full working dataset (FWD)
+
+Once the "model A" is created, before we can apply it to the `user` dataframe to obtain the full words count for every user, we need to highlight a constraint and an hypothesis:
+
+* constraint: `user_id` contained in the sample must exist also in the `user`
+* hypothesis: the weighted sort of a user is constant
+
+The constraint must be applied because we can possibly select a set of `user_id` not available in the `user`dataframe. The hypothesis is made because we're assuming that a user doesn't change his rating behaviour. In other terms he makes reviews on Yelp in a way that keeps his WS constant.
+
+Before applying the word count model we merge the working dataset (WD) with the full `user` dataframe. We take the `WS` field from the first and the `review_count` from the second. The merge is done by `user_id`, and the dataframe we obtain is the full working dataset (FWD).
+
+```{r include=FALSE, results='hide'}
+FWD <- merge(user_data[,c("user_id","review_count")],WD[,c("user_id","WS")],by="user_id")
+setnames(FWD, "review_count", "reviews")
+```
+
+### Predict full word count
+
+In the following table we show the comparison between the WD word and review count, the FWD review count, and the predicted value of the FWD words.
+
+```{r include=FALSE, results='hide'}
+FWD_pred <- predict(modelRF_A, FWD[,c(-1)])
+FWD <- cbind(FWD,round(FWD_pred,0))
+setnames(FWD, c(4), "words")
+#build comparision table
+FWD_merg <- merge(WD,FWD,by="user_id")[,c(1,2,7,3,5)]
+FWD_merg <- FWD_merg[FWD_merg$user_id %in% c("kGgAARL2UmvCcTRfiscjug","ia1nTRAQEaFWv0cwADeK7g","3gIfcQq5KxAegwCPXc83cQ"),]
+setnames(FWD_merg, c(2,3,4,5), c("words WD","words FWD","reviews WD","reviews FWD"))
+```
+
+```{r echo=FALSE}
+kable(FWD_merg, row.names = FALSE)
+```
+
+### Adding the remaining fields of interest
+
+Now that we have our full working dataset we can add the other two fields of interest `friends` and `yelping_since`. The field `friends` is changed: from a list of `user_id`'s friends to a count. The field `yelping_since` is also changed: from a string with format `YYYY-MM` to a difference in days, between the actual sysdate and the date the user signed up in Yelp.
+
+```{r include=FALSE, results='hide'}
+rm(FWD_pred,FWD_merg)
+FWD <- merge(FWD[,c(1,4,2)],user_data[,c("user_id","yelping_since","friends")],by="user_id")
+#elaborate "friends" field
+for(i in 1:nrow(FWD)){
+        FWD$friendsCount[i] <- length(unlist(FWD$friends[[i]]))
+}
+FWD <- FWD[,c(-5)]
+setnames(FWD, 'friendsCount',"friends")
+#elaborate "yelping_since" field
+FWD <- cbind(FWD, as.Date(paste(FWD$yelping_since,"-01",sep="")))
+#add time difference with sysdate
+setnames(FWD, 'as.Date(paste(FWD$yelping_since, "-01", sep = ""))',"yelping_days")
+FWD <- cbind(FWD, as.numeric(Sys.Date()-FWD$yelping_days))
+FWD <- FWD[,c(-4,-6)]
+setnames(FWD, "as.numeric(Sys.Date() - FWD$yelping_days)","yelping")
+rm(user_data)
+```
+
+### Building the metrics
+
+Once the FWD is complete our next goal is to establish the metrics. With "metric" we intend a new field that expresses the user field value related to the whole dataset (for example a mean, a maximum value etc...).
+
+We use again the weighted sort for word and review counts, but we add also the weighted sort of word count and yelping days.
+
+$$
+WS^r_{i}=\frac{w_{i}}{w_{max}}r_{i} + (1-\frac{w_{i}}{w_{max}})\bar{r}
+\qquad
+WS^y_{i}=\frac{w_{i}}{w_{max}}y_{i} + (1-\frac{w_{i}}{w_{max}})\bar{y}
+\qquad
+where\,\,w = \texttt{words}\,\,and\,\,y=\texttt{yelping}
+$$
+
+```{r include=FALSE, results='hide'}
+#add weight sort words/reviews
+FWD$WS_r <- (FWD$words/max(FWD$words)*FWD$reviews) + ((1-(FWD$words/max(FWD$words)))*mean(FWD$reviews))
+#add weight sort words/yelping
+FWD$WS_y <- (FWD$words/max(FWD$words)*FWD$yelping) + ((1-(FWD$words/max(FWD$words)))*mean(FWD$yelping))
+```
+
+Our choice of the metric will be a normalization related to the maximum value of the field, in formula:
+
+$$
+\begin{aligned}
+ M_{1i}=\frac{WS^r_{i}}{WS^r_{max}}
+ \qquad
+ M_{2i}=\frac{WS^y_{i}}{WS^y_{max}}
+ \qquad
+ M_{3i}=\frac{friends_{i}}{friends_{max}}
+\end{aligned}
+$$
+
+```{r include=FALSE, results='hide'}
+#we build the metrics
+FWD$M1 <- FWD$WS_r/max(FWD$WS_r)
+FWD$M2 <- FWD$WS_y/max(FWD$WS_y)
+FWD$M3 <- FWD$friends/max(FWD$friends)
+```
+
+With this choice we obtain indicators ranging from 0 to 1, that can be easily read as a percentage.
+
+### YUMI percent
+
+Now is the moment to define the percent maturity index for the *i-eth* user as a weighted sum:
+
+$$
+ \mathit{YUMI}_i^p=\sum_{k=1}^3\alpha_k{M}_{ki}\qquad where \qquad \sum_{k=1}^3\alpha_k=1 \ and \ 0 \leq \alpha_k \leq 1
+$$
+
+```{r include=FALSE, results='hide'}
+alpha <- c(0.5,0.4,0.1)
+#YUMI-P (percent)
+FWD$YUMI_P <- alpha[1]*FWD[,"M1"]+alpha[2]*FWD[,"M2"]+alpha[3]*FWD[,"M3"]
+```
+
+With the weight vector, alpha vector, set to $\alpha\left(`r alpha[1]`,`r alpha[2]`,`r alpha[3]`\right)$, we obtain the top and bottom three records shown in the following table, sorted by `YUMI_P` field in descending order: 
+
+The alpha vector coefficients was choosen to exalt the WS fields.
+
+```{r, include=FALSE, results='hide'}
+#set parameters
+opts_chunk$set(comment="", message=FALSE,tidy.opts=list(keep.blank.line=TRUE, width.cutoff=120),options(width=100), cache=TRUE,fig.align='center',fig.height=6, fig.width=10,fig.path='figure/beamer-',fig.show='hold',size='footnotesize', cache=FALSE)
+```
+
+```{r echo=FALSE}
+print(xtable(head(FWD[order(-FWD$YUMI_P),c(1:4,11)],3)), file="yumi_head.tex", floating=FALSE, include.rownames=FALSE)
+print(xtable(tail(FWD[order(-FWD$YUMI_P),c(1:4,11)],3)), file="yumi_tail.tex", floating=FALSE, include.rownames=FALSE)
+```
+
+\begin{table}[ht]
+\centering
+\subfloat[Top YUMIs percent]{\label{tab:tab1a}\scalebox{.6}{\input{./yumi_head}}}\quad
+\subfloat[Bottom YUMIs percent]{\label{tab:tab1b}\scalebox{.6}{\input{./yumi_tail}}}
+\end{table}
+
+## YUMI predictive model (Model B)
+
+Finally we can build the model to predict the YUMI percent value. We set the `words`, `reviews`, `friends` and `yelping` as predictors, and `YUMI_P` as outcome.
+
+```{r include=FALSE, results='hide'}
+#MODEL B: Random Forest
+#PREDICTORS: words, reviews, friends and yelping
+#OUTCOME: YUMI_p
+
+#slice the training set for cross validation
+set.seed(4567)
+slice_B <- createDataPartition(FWD[,c("words","reviews","friends","yelping","YUMI_P")]$YUMI_P, p=0.7, list=FALSE)
+sliceTrain_B <- FWD[,c("words","reviews","friends","yelping","YUMI_P")][slice_B,]
+sliceTest_B <- FWD[,c("words","reviews","friends","yelping","YUMI_P")][-slice_B,]
+
+#random forest
+modelRF_B <- train(YUMI_P ~ .,
+                 data=sliceTrain_B,
+                 method="rf",
+                 trControl=trainControl(method="cv", 5),
+                 ntree=10)
+
+predictRF_B <- predict(modelRF_B, sliceTest_B)
+cm_B <- confusionMatrix(cut(predictRF_B, seq(from = 0, to = 1, by = 0.1)),cut(sliceTest_B$YUMI_P, seq(from = 0, to = 1, by = 0.1)))
+```
+
+We choose again a Random Forest algorithm, and with 10 trees and 5 folds we obtain an accuracy of `r cm_B$overall['Accuracy']` and estimated out-of-sample error of `r 1-cm_B$overall['Accuracy']`.
+
+# Results
+
+The second model "model B", let us rate individual Yelp users by feeding the predictors.
+
+An immediate application would be by taking data from a yelp user web page. The only drawback is that we need to find automated scrapers to extract several reviews at the time from the web.
+
+With the YUMI-p index, we can also establish a ranking. We can define three clusters (medals), gold, silver & bronze, based on the range of YUMI-p values. We call this new field YUMI-c, which stands for *YUMI class*. Its value is a percentage of a normalized distance `d`. The distance is the ratio between the number of FWD records whose `YUMI-p` value is under the index mean, and the total number of records. In formula:
+
+$$
+ \begin{aligned}
+ d = \frac{N_{rec}^{FWD}|_{YUMI_p<\overline{YUMI_p}}}{N_{rec}^{Tot}} 
+ \qquad
+ \left\{\begin{matrix}
+if \ {YUMI_p} \geq 0,9 d \ then \ \mathit{YUMI_c} \rightarrow "Gold"
+\\ \\
+if \ 0,7d \leq \mathit{YUMI_p} < 0,9 d \ then \ \mathit{YUMI_c} \rightarrow "Silver"
+\\ \\
+if \ 0,5d \leq \mathit{YUMI_p} < 0,7 d \ then \ \mathit{YUMI_c} \rightarrow "Bronze"
+\end{matrix}\right.
+ \end{aligned}
+$$
+
+With the `d` we intended to relate top users (e.g 90%) to users under the YUMI-p mean, and not to the entire interval of variation.
+
+```{r include=FALSE, results='hide'}
+#normalized distance
+d <- nrow(FWD[FWD$YUMI_P<mean(FWD$YUMI_P),])/nrow(FWD)
+#filter records per class
+FWD_G <- FWD[FWD$YUMI_P>=0.9*d,]
+FWD_S <- FWD[FWD$YUMI_P < 0.9*d & FWD$YUMI_P >= 0.7*d,]
+FWD_B <- FWD[FWD$YUMI_P < 0.7*d & FWD$YUMI_P >= 0.5*d,]
+FWD_N <- FWD[FWD$YUMI_P<0.5*d,]
+#assign class
+FWD_G$YUMI_C <- "Gold"
+FWD_S$YUMI_C <- "Silver"
+FWD_B$YUMI_C <- "Bronze"
+FWD_N$YUMI_C <- ""
+#bind again the dataframes 
+YUMI <- rbind(FWD_G,FWD_S,FWD_B,FWD_N)
+YUMI$YUMI_C <- as.factor(YUMI$YUMI_C)
+rm(FWD)
+#create barplot
+medals <- count(YUMI,"YUMI_C")[count(YUMI,"YUMI_C")$YUMI_C != "",]
+#order <- c("Gold", "Silver", "Bronze")
+medals$YUMI_C <- factor(medals$YUMI_C, c("Gold", "Silver", "Bronze"))
+g <- ggplot(medals, aes(x=YUMI_C, y=freq, fill = as.factor(YUMI_C)))
+g <- g + geom_bar(stat = "identity")
+g <- g + labs(x= "Medals", y = "Occurences") + theme(legend.position="none")
+g <- g + scale_fill_manual(values=c("#ffd700", "#c0c0c0", "#cd7f32"))
+g <- g + geom_text(aes(label = freq, y=freq/2), size = 4)
+```
+
+```{r fig.width=3, fig.height=1.5, echo=FALSE}
+#show repartition
+g
+```
+
+# Discussion
+
+In this section we make some conclusive considerations of the results obtained. By keeping the alpha vector fixed (every value equal to $\frac{1}{3}$), and by looping on the sample `size` parameter in the interval `[5000 to 100000]`, we can plot a distribution of YUMI-c.
+
+![Sample variations](data/sample_var1.png)
+
+![Sample variations](data/sample_var2.png)
+
+We can observe that in the selected interval, the number of medals is not growing with the increase of the sample size. This mean that for a high population, we may have a low probability to encounter high rated YUMI users (users with medals).
+
+In relation of the initial question, this may be an undesiderable effect because high rated YUMI users wouldn't emerge among others when evaluating businesses.
+
+This effect may be countered by reducing the sample size, for example by taking only users from one country, or by assigning higher weight to the coefficients of the alpha vector that raises YUMI-p.
+
