@@ -1,0 +1,54 @@
+Y.U.M.I - Yelp User's Maturity Index
+========================================================
+author: Alessio Benedetti
+date: October 27th, 2015
+
+[Github repository](https://github.com/phoinike/Yelp-Challenge-Capstone)
+
+This work is licensed under [MIT License](https://github.com/phoinike/Yelp-Challenge-Capstone/blob/master/LICENSE)
+
+Highlight Yelp Users
+========================================================
+
+The objective is to use the Yelp data to create an index *the "Y.U.M.I": Yelp User's Maturity Index* that highlights "mature" users.
+
+High rated YUMI users would give a way to easily choose between two or more businesses.
+
+Methodology
+========================================================
+
+The approach followed was to:
+
+* select relevant dataframes and fields
+* establish the metrics
+* build a predictive model to calculate the YUMI of an user
+* clusterize the YUMI to select high rated users (Gold, Silver & Bronze users)
+
+Results 1/2
+========================================================
+From the metrics,
+
+$$
+\begin{aligned}
+ M_{1i}=\frac{WS^r_{i}}{WS^r_{max}}
+ \qquad
+ M_{2i}=\frac{WS^y_{i}}{WS^y_{max}}
+ \qquad
+ M_{3i}=\frac{friends_{i}}{friends_{max}}
+\end{aligned}
+$$
+
+we built the following YUMI for the *i-eth* user:
+
+$$
+ \mathit{YUMI}_i^p=\sum_{k=1}^3\alpha_k{M}_{ki}\qquad where \qquad \sum_{k=1}^3\alpha_k=1 \ and \ 0 \leq \alpha_k \leq 1
+$$
+
+Results 2/2
+========================================================
+
+![Sample variations](data/sample_var1.png)
+
+![Sample variations](data/sample_var2.png)
+
+From the study we observed that in a high population, we may have a low probability to encounter high rated YUMI users (Gold, Silver & Bronze users).
